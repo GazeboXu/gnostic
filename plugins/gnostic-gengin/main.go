@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"text/template"
+	"time"
 
 	"github.com/golang/protobuf/proto"
 	discovery_v1 "github.com/googleapis/gnostic/discovery"
@@ -57,30 +58,34 @@ func main() {
 }
 
 const GIN_TEMPLATE = `
+// gin handler file generated from openapi doc
+// Created by plugin gengin of gnostic at {{.CreatedAt}}
+// WARNING! All changes made in this file will be lost when building
+
 package docs
 
 import (
-	{{range .Imports}}
-	{{.}}
+	"github.com/gin-gonic/gin"
+	"wrnetman/netadapter/overhttp/netmodel"
+	{{range .Imports}}{{.}}
 	{{end}}
 )
 
 func RouterInit(r *gin.Engine) {
-	{{range .APIs}}
-	{{.}}
-	{{end}}
+	{{range .APIs}}{{.}}{{end}}
 }
 `
 const GIN_PATH_TEMPLATE = `
 	r.{{.HTTPMethod}}("{{.BasePath}}{{.FullMethodPath}}", func(c *gin.Context) {
 		c.JSON(200, netmodel.CallResult{
-			Data: http{{.MethodPackage}}.{{.BareMethodName}}({{.Params}}),
+			Data: {{.MethodPackage}}.{{.BareMethodName}}({{.Params}}),
 		})
 	})`
 
 type GinTemplateInfo struct {
-	Imports []string
-	APIs    []string
+	CreatedAt string
+	Imports   []string
+	APIs      []string
 }
 
 type GinPathTemplateInfo struct {
@@ -107,18 +112,17 @@ func v2doc2Gin(doc *openapiv2.Document) (goSource string) {
 		subTmp, _ := template.New("subtest").Parse(GIN_PATH_TEMPLATE)
 		builder := &strings.Builder{}
 		info := &GinTemplateInfo{
-			Imports: []string{
-				`"wrnetman/netadapter/overhttp/httpmytest"`,
-				`"wrnetman/netadapter/overhttp/netmodel"`,
-				`"github.com/gin-gonic/gin"`,
-			},
+			CreatedAt: time.Now().Format(time.RFC3339),
 		}
+		importMap := make(map[string]string)
 		for _, pathItem := range doc.Paths.Path {
 			methodInfo := &GinPathTemplateInfo{
 				BasePath:       "/v1",
 				FullMethodPath: pathItem.Name,
 			}
 			methodInfo.MethodPackage, methodInfo.BareMethodName = splitFullMethodPath(pathItem.Name)
+			methodInfo.MethodPackage = "http" + methodInfo.MethodPackage
+			importMap[methodInfo.MethodPackage] = methodInfo.MethodPackage
 			var operation *openapiv2.Operation
 			if pathItem.Value.Get != nil {
 				methodInfo.HTTPMethod = "GET"
@@ -143,8 +147,13 @@ func v2doc2Gin(doc *openapiv2.Document) (goSource string) {
 			methodInfo.Params = strings.Join(paramList, ", ")
 			methodBuilder := &strings.Builder{}
 			subTmp.Execute(methodBuilder, methodInfo)
+
 			info.APIs = append(info.APIs, methodBuilder.String())
 		}
+		for key := range importMap {
+			info.Imports = append(info.Imports, fmt.Sprintf(`"wrnetman/netadapter/overhttp/%s"`, key))
+		}
+
 		tmp.Execute(builder, info)
 		goSource = builder.String()
 	}
