@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"path/filepath"
 	"strings"
 	"text/template"
@@ -66,6 +67,7 @@ package docs
 
 import (
 	"github.com/gin-gonic/gin"
+	"wrnetman/wrutils"
 	"wrnetman/netadapter/overhttp/netmodel"
 	{{range .Imports}}{{.}}
 	{{end}}
@@ -107,6 +109,27 @@ func splitFullMethodPath(fullMethodPath string) (methodPackage, bareMethod strin
 	return methodPackage, bareMethod
 }
 
+func getTypeConvFun(paramType, paramFormat string) (convFunc string) {
+	if paramType == "string" {
+	} else if paramType == "integer" {
+		convFunc = "wrutils.String2Int"
+		if paramFormat == "int64" {
+			convFunc = "wrutils.String2Int64"
+		}
+	} else if paramType == "number" {
+		convFunc = "wrutils.String2Float"
+	} else if paramType == "boolean" {
+		convFunc = "wrutils.String2Bool"
+	}
+	return convFunc
+}
+
+var methodList = []string{"GET", "PUT", "POST", "DELETE", "OPTIONS", "HEAD", "PATCH"}
+var supportedMethodMap = map[string]bool{
+	"GET":  true,
+	"POST": true,
+}
+
 func v2doc2Gin(doc *openapiv2.Document) (goSource string) {
 	if tmp, err := template.New("test").Parse(GIN_TEMPLATE); err == nil {
 		subTmp, _ := template.New("subtest").Parse(GIN_PATH_TEMPLATE)
@@ -124,24 +147,37 @@ func v2doc2Gin(doc *openapiv2.Document) (goSource string) {
 			methodInfo.MethodPackage = "http" + methodInfo.MethodPackage
 			importMap[methodInfo.MethodPackage] = methodInfo.MethodPackage
 			var operation *openapiv2.Operation
-			if pathItem.Value.Get != nil {
-				methodInfo.HTTPMethod = "GET"
-				operation = pathItem.Value.Get
-			} else if pathItem.Value.Post != nil {
-				methodInfo.HTTPMethod = "POST"
-				operation = pathItem.Value.Post
-			} else {
+			var index int
+			for index, operation = range []*openapiv2.Operation{
+				pathItem.Value.Get,
+				pathItem.Value.Put,
+				pathItem.Value.Post,
+				pathItem.Value.Delete,
+				pathItem.Value.Options,
+				pathItem.Value.Head,
+				pathItem.Value.Patch,
+			} {
+				if operation != nil {
+					methodInfo.HTTPMethod = methodList[index]
+					break
+				}
+			}
+			if !supportedMethodMap[methodInfo.HTTPMethod] {
+				msg := fmt.Sprintf("unsupported method:%s!\n", methodInfo.HTTPMethod)
+				log.Panicln(msg)
+				methodInfo.FullMethodPath = msg
 				break
 			}
+
 			var paramList []string
 			for _, param := range operation.Parameters {
 				nonBodyParam := param.GetParameter().GetNonBodyParameter()
 				if methodInfo.HTTPMethod == "GET" {
 					querySchema := nonBodyParam.GetQueryParameterSubSchema()
-					paramList = append(paramList, fmt.Sprintf(`c.Query("%s")`, querySchema.Name))
+					paramList = append(paramList, fmt.Sprintf(`%s(c.Query("%s"))`, getTypeConvFun(querySchema.Type, querySchema.Format), querySchema.Name))
 				} else if methodInfo.HTTPMethod == "POST" {
 					formSchema := nonBodyParam.GetFormDataParameterSubSchema()
-					paramList = append(paramList, fmt.Sprintf(`c.PostForm("%s")`, formSchema.Name))
+					paramList = append(paramList, fmt.Sprintf(`%s(c.PostForm("%s"))`, getTypeConvFun(formSchema.Type, formSchema.Format), formSchema.Name))
 				}
 			}
 			methodInfo.Params = strings.Join(paramList, ", ")
