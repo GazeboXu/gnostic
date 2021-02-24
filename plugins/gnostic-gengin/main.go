@@ -79,6 +79,7 @@ func RouterInit(r *gin.Engine) {
 `
 const GIN_PATH_TEMPLATE = `
 	r.{{.HTTPMethod}}("{{.BasePath}}{{.FullMethodPath}}", func(c *gin.Context) {
+		{{.PreParams}}
 		c.JSON(200, netmodel.CallResult{
 			Data: {{.MethodPackage}}.{{.BareMethodName}}({{.Params}}),
 		})
@@ -96,6 +97,7 @@ type GinPathTemplateInfo struct {
 	FullMethodPath string
 	MethodPackage  string
 	BareMethodName string
+	PreParams      string
 	Params         string
 }
 
@@ -109,19 +111,34 @@ func splitFullMethodPath(fullMethodPath string) (methodPackage, bareMethod strin
 	return methodPackage, bareMethod
 }
 
-func getTypeConvFun(paramType, paramFormat string) (convFunc string) {
-	if paramType == "string" {
-	} else if paramType == "integer" {
+func getTypeConvFun(goType string) (convFunc string) {
+	if goType == "string" {
+	} else if goType == "int" {
 		convFunc = "wrutils.String2Int"
-		if paramFormat == "int64" {
-			convFunc = "wrutils.String2Int64"
-		}
-	} else if paramType == "number" {
+	} else if goType == "int64" {
+		convFunc = "wrutils.String2Int64"
+	} else if goType == "float64" {
 		convFunc = "wrutils.String2Float"
-	} else if paramType == "boolean" {
+	} else if goType == "bool" {
 		convFunc = "wrutils.String2Bool"
 	}
 	return convFunc
+}
+
+func openAPIType2Go(paramType, paramFormat string) (goType string) {
+	goType = "string"
+	if paramType == "string" {
+	} else if paramType == "integer" {
+		goType = "int"
+		if paramFormat == "int64" {
+			goType = "int64"
+		}
+	} else if paramType == "number" {
+		goType = "float64"
+	} else if paramType == "boolean" {
+		goType = "bool"
+	}
+	return goType
 }
 
 var methodList = []string{"GET", "PUT", "POST", "DELETE", "OPTIONS", "HEAD", "PATCH"}
@@ -169,17 +186,48 @@ func v2doc2Gin(doc *openapiv2.Document) (goSource string) {
 				break
 			}
 
-			var paramList []string
-			for _, param := range operation.Parameters {
-				nonBodyParam := param.GetParameter().GetNonBodyParameter()
-				if methodInfo.HTTPMethod == "GET" {
-					querySchema := nonBodyParam.GetQueryParameterSubSchema()
-					paramList = append(paramList, fmt.Sprintf(`%s(c.Query("%s"))`, getTypeConvFun(querySchema.Type, querySchema.Format), querySchema.Name))
-				} else if methodInfo.HTTPMethod == "POST" {
-					formSchema := nonBodyParam.GetFormDataParameterSubSchema()
-					paramList = append(paramList, fmt.Sprintf(`%s(c.PostForm("%s"))`, getTypeConvFun(formSchema.Type, formSchema.Format), formSchema.Name))
+			paramList := make([]string, len(operation.Parameters))
+			preParamList := make([]string, len(operation.Parameters))
+			for index, param := range operation.Parameters {
+				paramList[index] = fmt.Sprintf("param%d", index+1)
+				var paramName, paramType, paramFormat, getParamFuncName string
+				var paramRequired bool
+				if nonBodyParam := param.GetParameter().GetNonBodyParameter(); nonBodyParam != nil {
+					if methodInfo.HTTPMethod == "GET" {
+						subSchema := nonBodyParam.GetQueryParameterSubSchema()
+						paramName = subSchema.Name
+						paramType = subSchema.Type
+						paramFormat = subSchema.Format
+						paramRequired = subSchema.Required
+						getParamFuncName = "GetQuery"
+					} else if methodInfo.HTTPMethod == "POST" {
+						subSchema := nonBodyParam.GetFormDataParameterSubSchema()
+						paramName = subSchema.Name
+						paramType = subSchema.Type
+						paramFormat = subSchema.Format
+						paramRequired = subSchema.Required
+						getParamFuncName = "GetPostForm"
+					}
+				} else {
+				}
+				paramGoType := openAPIType2Go(paramType, paramFormat)
+				if paramRequired {
+					preParamList[index] = fmt.Sprintf(`
+		var %s %s
+		if strValue, isExist := c.%s("%s"); isExist {
+			%s = %s(strValue)
+		} else {
+		}`, paramList[index], paramGoType, getParamFuncName, paramName, paramList[index], getTypeConvFun(paramGoType))
+				} else {
+					preParamList[index] = fmt.Sprintf(`
+		var %s *%s
+		if strValue, isExist := c.%s("%s"); isExist {
+			tmpValue := %s(strValue)
+			%s = &tmpValue
+		}`, paramList[index], paramGoType, getParamFuncName, paramName, getTypeConvFun(paramGoType), paramList[index])
 				}
 			}
+			methodInfo.PreParams = strings.Join(preParamList, "\n")
 			methodInfo.Params = strings.Join(paramList, ", ")
 			methodBuilder := &strings.Builder{}
 			subTmp.Execute(methodBuilder, methodInfo)
