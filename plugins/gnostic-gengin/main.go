@@ -78,7 +78,7 @@ package docs
 import (
 	"context"
 	"github.com/gin-gonic/gin"
-	"wrnetman/wrutils"
+	"gitee.com/julytech/zlutils"
 	"wrnetman/netadapter/overhttp/netmodel"
 	"wrnetman/docs/optype"
 	{{range .Imports}}{{.}}
@@ -118,6 +118,12 @@ const GIN_TYPE_TEMPLATE = `
 // WARNING! All changes made in this file will be lost when building
 
 package optype
+
+import (
+	"time"
+)
+
+var _ time.Time
 
 {{range .APITypes}}
 type {{.TypeName}} struct {
@@ -169,13 +175,15 @@ func splitFullMethodPath(fullMethodPath string) (methodPackage, bareMethod strin
 func getTypeConvFun(goType string) (convFunc string) {
 	if goType == "string" {
 	} else if goType == "int" {
-		convFunc = "wrutils.String2Int"
+		convFunc = "zlutils.Str2Int"
 	} else if goType == "int64" {
-		convFunc = "wrutils.String2Int64"
+		convFunc = "zlutils.Str2Int64"
 	} else if goType == "float64" {
-		convFunc = "wrutils.String2Float"
+		convFunc = "zlutils.Str2Float64"
 	} else if goType == "bool" {
-		convFunc = "wrutils.String2Bool"
+		convFunc = "zlutils.String2Bool"
+	} else if goType == "time.Time" {
+		convFunc = "zlutils.Str2Time"
 	}
 	return convFunc
 }
@@ -183,6 +191,9 @@ func getTypeConvFun(goType string) (convFunc string) {
 func openAPIType2Go(paramType, paramFormat string) (goType string) {
 	goType = "string"
 	if paramType == "string" {
+		if paramFormat == "date-time" {
+			goType = "time.Time"
+		}
 	} else if paramType == "integer" {
 		goType = "int"
 		if paramFormat == "int64" {
