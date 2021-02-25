@@ -20,7 +20,8 @@ func main() {
 	env, err := plugins.NewEnvironment()
 	env.RespondAndExitIfError(err)
 
-	fileContent := ""
+	callerSrc := ""
+	typeSrc := ""
 	for _, model := range env.Request.Models {
 		switch model.TypeUrl {
 		case "openapi.v2.Document":
@@ -28,7 +29,7 @@ func main() {
 			err = proto.Unmarshal(model.Value, documentv2)
 			if err == nil {
 				// Analyze the API document.
-				fileContent = v2doc2Gin(documentv2)
+				callerSrc, typeSrc = v2doc2Gin(documentv2)
 			}
 		case "openapi.v3.Document":
 			documentv3 := &openapiv3.Document{}
@@ -52,8 +53,17 @@ func main() {
 	file := &plugins.File{}
 
 	file.Name = outputName1
-	file.Data = []byte(fileContent)
+	file.Data = []byte(callerSrc)
 	env.Response.Files = append(env.Response.Files, file)
+
+	outputName2 := filepath.Join(
+		filepath.Dir(env.Request.SourceName), "/optype/optype_autogen.go")
+	file2 := &plugins.File{}
+
+	file2.Name = outputName2
+	file2.Data = []byte(typeSrc)
+	env.Response.Files = append(env.Response.Files, file2)
+
 	env.RespondAndExitIfError(err)
 	env.RespondAndExit()
 }
@@ -66,29 +76,73 @@ const GIN_TEMPLATE = `
 package docs
 
 import (
+	"context"
 	"github.com/gin-gonic/gin"
 	"wrnetman/wrutils"
 	"wrnetman/netadapter/overhttp/netmodel"
+	"wrnetman/docs/optype"
 	{{range .Imports}}{{.}}
 	{{end}}
 )
 
+// optype name is the func name prefix with 'AT'
+// func ExampleFunc(ctx context.Context, param *optype.ATExampleFunc) (result interface{}, err error) {
+//	return result, err
+// }
+
 func RouterInit(r *gin.Engine) {
-	{{range .APIs}}{{.}}{{end}}
+	{{range .APIs}}
+	r.{{.HTTPMethod}}("{{.BasePath}}{{.FullMethodPath}}", func(c *gin.Context) {
+		param := &optype.{{.TypeName}}{}
+		{{.PreParams}}
+		if result, err := {{.MethodPackage}}.{{.BareMethodName}}(context.TODO(), param); err == nil {
+			c.JSON(200, netmodel.CallResult{
+				HTTPCode: 200,
+				Data: result,
+			})
+		} else {
+			c.JSON(200, netmodel.CallResult{
+				HTTPCode: 200,
+				Code: -1,
+				ErrMsg: err.Error(),
+			})
+		}
+	})
+	{{end}}
 }
 `
-const GIN_PATH_TEMPLATE = `
-	r.{{.HTTPMethod}}("{{.BasePath}}{{.FullMethodPath}}", func(c *gin.Context) {
-		{{.PreParams}}
-		c.JSON(200, netmodel.CallResult{
-			Data: {{.MethodPackage}}.{{.BareMethodName}}({{.Params}}),
-		})
-	})`
+
+const GIN_TYPE_TEMPLATE = `
+// type file generated from openapi doc
+// Created by plugin gengin of gnostic at {{.CreatedAt}}
+// WARNING! All changes made in this file will be lost when building
+
+package optype
+
+{{range .APITypes}}
+type {{.TypeName}} struct {
+{{range .Fields}}	{{.FieldName}}	{{.FieldType}}	{{.FieldRemark}}
+{{end}}
+}
+{{end}}
+`
 
 type GinTemplateInfo struct {
 	CreatedAt string
 	Imports   []string
-	APIs      []string
+	APITypes  []*APIType
+	APIs      []*GinPathTemplateInfo
+}
+
+type APIType struct {
+	TypeName string
+	Fields   []*FieldInfo
+}
+
+type FieldInfo struct {
+	FieldName   string
+	FieldType   string
+	FieldRemark string
 }
 
 type GinPathTemplateInfo struct {
@@ -98,7 +152,8 @@ type GinPathTemplateInfo struct {
 	MethodPackage  string
 	BareMethodName string
 	PreParams      string
-	Params         string
+	// Params         string
+	TypeName string
 }
 
 func splitFullMethodPath(fullMethodPath string) (methodPackage, bareMethod string) {
@@ -147,13 +202,18 @@ var supportedMethodMap = map[string]bool{
 	"POST": true,
 }
 
-func v2doc2Gin(doc *openapiv2.Document) (goSource string) {
-	if tmp, err := template.New("test").Parse(GIN_TEMPLATE); err == nil {
-		subTmp, _ := template.New("subtest").Parse(GIN_PATH_TEMPLATE)
-		builder := &strings.Builder{}
-		info := &GinTemplateInfo{
-			CreatedAt: time.Now().Format(time.RFC3339),
-		}
+func UpperFirstLetter(str string) string {
+	if len(str) > 0 {
+		str = strings.ToUpper(str[:1]) + str[1:]
+	}
+	return str
+}
+
+func v2doc2Gin(doc *openapiv2.Document) (goSource, goTypeSrc string) {
+	info := &GinTemplateInfo{
+		CreatedAt: time.Now().Format(time.RFC3339),
+	}
+	if tmp, err := template.New("caller").Parse(GIN_TEMPLATE); err == nil {
 		importMap := make(map[string]string)
 		for _, pathItem := range doc.Paths.Path {
 			methodInfo := &GinPathTemplateInfo{
@@ -186,10 +246,20 @@ func v2doc2Gin(doc *openapiv2.Document) (goSource string) {
 				break
 			}
 
-			paramList := make([]string, len(operation.Parameters))
+			// paramList := make([]string, len(operation.Parameters))
 			preParamList := make([]string, len(operation.Parameters))
+			apiType := &APIType{
+				TypeName: fmt.Sprintf("AT%s", methodInfo.BareMethodName),
+			}
+			methodInfo.TypeName = apiType.TypeName
+
+			// apiType.Fields = append(apiType.Fields, &FieldInfo{
+			// 	FieldName:   "MapData",
+			// 	FieldType:   "map[string]interface{}",
+			// 	FieldRemark: "`json:\"-\"`",
+			// })
 			for index, param := range operation.Parameters {
-				paramList[index] = fmt.Sprintf("param%d", index+1)
+				// paramList[index] = fmt.Sprintf("param%d", index+1)
 				var paramName, paramType, paramFormat, getParamFuncName string
 				var paramRequired bool
 				if nonBodyParam := param.GetParameter().GetNonBodyParameter(); nonBodyParam != nil {
@@ -208,38 +278,52 @@ func v2doc2Gin(doc *openapiv2.Document) (goSource string) {
 						paramRequired = subSchema.Required
 						getParamFuncName = "GetPostForm"
 					}
+				} else if bodyParam := param.GetParameter().GetBodyParameter(); bodyParam != nil { // todo
+					paramName = bodyParam.Name
+					paramRequired = bodyParam.Required
+					getParamFuncName = "GetQuery"
 				} else {
+					panic("parameter is not either body or nonbody")
 				}
 				paramGoType := openAPIType2Go(paramType, paramFormat)
+				fieldInfo := &FieldInfo{
+					FieldName:   UpperFirstLetter(paramName),
+					FieldRemark: fmt.Sprintf("`json:\"%s,omitempty\"`", paramName),
+				}
 				if paramRequired {
+					fieldInfo.FieldType = paramGoType
 					preParamList[index] = fmt.Sprintf(`
-		var %s %s
 		if strValue, isExist := c.%s("%s"); isExist {
-			%s = %s(strValue)
+			param.%s = %s(strValue)
 		} else {
-		}`, paramList[index], paramGoType, getParamFuncName, paramName, paramList[index], getTypeConvFun(paramGoType))
+		}`, getParamFuncName, paramName, fieldInfo.FieldName, getTypeConvFun(paramGoType))
 				} else {
+					fieldInfo.FieldType = fmt.Sprintf("*%s", paramGoType)
 					preParamList[index] = fmt.Sprintf(`
-		var %s *%s
 		if strValue, isExist := c.%s("%s"); isExist {
 			tmpValue := %s(strValue)
-			%s = &tmpValue
-		}`, paramList[index], paramGoType, getParamFuncName, paramName, getTypeConvFun(paramGoType), paramList[index])
+			param.%s = &tmpValue
+		}`, getParamFuncName, paramName, getTypeConvFun(paramGoType), fieldInfo.FieldName)
 				}
+				apiType.Fields = append(apiType.Fields, fieldInfo)
 			}
 			methodInfo.PreParams = strings.Join(preParamList, "\n")
-			methodInfo.Params = strings.Join(paramList, ", ")
-			methodBuilder := &strings.Builder{}
-			subTmp.Execute(methodBuilder, methodInfo)
-
-			info.APIs = append(info.APIs, methodBuilder.String())
+			// methodInfo.Params = strings.Join(paramList, ", ")
+			info.APIs = append(info.APIs, methodInfo)
+			info.APITypes = append(info.APITypes, apiType)
 		}
 		for key := range importMap {
 			info.Imports = append(info.Imports, fmt.Sprintf(`"wrnetman/netadapter/overhttp/%s"`, key))
 		}
 
+		builder := &strings.Builder{}
 		tmp.Execute(builder, info)
 		goSource = builder.String()
 	}
-	return goSource
+	if tmp, err := template.New("type").Parse(GIN_TYPE_TEMPLATE); err == nil {
+		builder := &strings.Builder{}
+		tmp.Execute(builder, info)
+		goTypeSrc = builder.String()
+	}
+	return goSource, goTypeSrc
 }
