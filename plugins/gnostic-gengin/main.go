@@ -90,10 +90,16 @@ import (
 //	return result, err
 // }
 
+var FuncMap = map[string]interface{} {
+	{{range .APIs}}"{{.BasePath}}{{.FullMethodPath}}" : {{.MethodPackage}}.{{.BareMethodName}},
+	{{end}}
+}
+
 func RouterInit(r *gin.Engine) {
 	{{range .APIs}}
 	r.{{.HTTPMethod}}("{{.BasePath}}{{.FullMethodPath}}", func(c *gin.Context) {
-		param := &optype.{{.TypeName}}{}
+		param := &optype.{{.TypeName}} {
+		}
 		{{.PreParams}}
 		if result, err := {{.MethodPackage}}.{{.BareMethodName}}(context.TODO(), param); err == nil {
 			c.JSON(200, netmodel.CallResult{
@@ -265,8 +271,8 @@ func v2doc2Gin(doc *openapiv2.Document) (goSource, goTypeSrc string) {
 			methodInfo.TypeName = apiType.TypeName
 
 			// apiType.Fields = append(apiType.Fields, &FieldInfo{
-			// 	FieldName:   "MapData",
-			// 	FieldType:   "map[string]interface{}",
+			// 	FieldName:   "C",
+			// 	FieldType:   "*gin.Context",
 			// 	FieldRemark: "`json:\"-\"`",
 			// })
 			for index, param := range operation.Parameters {
