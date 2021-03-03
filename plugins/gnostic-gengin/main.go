@@ -179,7 +179,13 @@ func splitFullMethodPath(fullMethodPath string) (methodPackage, bareMethod strin
 }
 
 func getTypeConvFun(goType string) (convFunc string) {
-	if goType == "string" {
+	if isGoTypeArray(goType) {
+		elemTypeConvFun := getTypeConvFun(goType[2:])
+		if elemTypeConvFun == "" {
+			elemTypeConvFun = "zlutils.Str2Str"
+		}
+		convFunc = elemTypeConvFun + "Slice"
+	} else if goType == "string" {
 	} else if goType == "int" {
 		convFunc = "zlutils.Str2Int"
 	} else if goType == "int64" {
@@ -194,9 +200,11 @@ func getTypeConvFun(goType string) (convFunc string) {
 	return convFunc
 }
 
-func openAPIType2Go(paramType, paramFormat string) (goType string) {
+func openAPIType2Go(paramType, paramFormat string, item *openapiv2.PrimitivesItems) (goType string) {
 	goType = "string"
-	if paramType == "string" {
+	if paramType == "array" {
+		goType = "[]" + openAPIType2Go(item.Type, item.Format, item.Items)
+	} else if paramType == "string" {
 		if paramFormat == "date-time" {
 			goType = "time.Time"
 		}
@@ -211,6 +219,10 @@ func openAPIType2Go(paramType, paramFormat string) (goType string) {
 		goType = "bool"
 	}
 	return goType
+}
+
+func isGoTypeArray(goType string) bool {
+	return goType[:2] == "[]"
 }
 
 var methodList = []string{"GET", "PUT", "POST", "DELETE", "OPTIONS", "HEAD", "PATCH"}
@@ -279,6 +291,7 @@ func v2doc2Gin(doc *openapiv2.Document) (goSource, goTypeSrc string) {
 				// paramList[index] = fmt.Sprintf("param%d", index+1)
 				var paramName, paramType, paramFormat, getParamFuncName string
 				var paramRequired bool
+				var item *openapiv2.PrimitivesItems
 				if nonBodyParam := param.GetParameter().GetNonBodyParameter(); nonBodyParam != nil {
 					if methodInfo.HTTPMethod == "GET" {
 						subSchema := nonBodyParam.GetQueryParameterSubSchema()
@@ -287,6 +300,7 @@ func v2doc2Gin(doc *openapiv2.Document) (goSource, goTypeSrc string) {
 						paramFormat = subSchema.Format
 						paramRequired = subSchema.Required
 						getParamFuncName = "GetQuery"
+						item = subSchema.Items
 					} else if methodInfo.HTTPMethod == "POST" {
 						subSchema := nonBodyParam.GetFormDataParameterSubSchema()
 						paramName = subSchema.Name
@@ -294,6 +308,7 @@ func v2doc2Gin(doc *openapiv2.Document) (goSource, goTypeSrc string) {
 						paramFormat = subSchema.Format
 						paramRequired = subSchema.Required
 						getParamFuncName = "GetPostForm"
+						item = subSchema.Items
 					}
 				} else if bodyParam := param.GetParameter().GetBodyParameter(); bodyParam != nil { // todo
 					paramName = bodyParam.Name
@@ -302,12 +317,12 @@ func v2doc2Gin(doc *openapiv2.Document) (goSource, goTypeSrc string) {
 				} else {
 					panic("parameter is not either body or nonbody")
 				}
-				paramGoType := openAPIType2Go(paramType, paramFormat)
+				paramGoType := openAPIType2Go(paramType, paramFormat, item)
 				fieldInfo := &FieldInfo{
 					FieldName:   UpperFirstLetter(paramName),
 					FieldRemark: fmt.Sprintf("`json:\"%s,omitempty\"`", paramName),
 				}
-				if paramRequired {
+				if paramRequired || isGoTypeArray(paramGoType) {
 					fieldInfo.FieldType = paramGoType
 					preParamList[index] = fmt.Sprintf(`
 		if strValue, isExist := c.%s("%s"); isExist {
