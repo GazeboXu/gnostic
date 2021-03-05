@@ -103,14 +103,18 @@ func RouterInit(r *gin.Engine) {
 		{{.PreParams}}
 		if result, err := {{.MethodPackage}}.{{.BareMethodName}}(context.TODO(), param); err == nil {
 			c.JSON(200, netmodel.CallResult{
-				HTTPCode: 200,
+				BaseCallResult : netmodel.BaseCallResult {
+					HTTPCode: 200,
+				},
 				Data: result,
 			})
 		} else {
 			c.JSON(200, netmodel.CallResult{
-				HTTPCode: 200,
-				Code: -1,
-				ErrMsg: err.Error(),
+				BaseCallResult : netmodel.BaseCallResult {
+					HTTPCode: 200,
+					Code: -1,
+					ErrMsg: err.Error(),
+				},
 			})
 		}
 	})
