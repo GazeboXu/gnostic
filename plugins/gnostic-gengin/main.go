@@ -78,9 +78,11 @@ package docs
 import (
 	"context"
 	"github.com/gin-gonic/gin"
+	"github.com/go-playground/validator"
 	"gitee.com/julytech/zlutils"
 	"wrnetman/netadapter/overhttp/netmodel"
 	"wrnetman/docs/optype"
+	"wrnetman/biz/bizutils"
 	{{range .Imports}}{{.}}
 	{{end}}
 )
@@ -95,24 +97,41 @@ var FuncMap = map[string]interface{} {
 	{{end}}
 }
 
+var validate *validator.Validate
+
+func init() {
+	validate = validator.New()
+	validate.RegisterValidation("sid", bizutils.ValidateSid)
+}
+
 func RouterInit(r *gin.Engine) {
 	{{range .APIs}}
 	r.{{.HTTPMethod}}("{{.BasePath}}{{.FullMethodPath}}", func(c *gin.Context) {
 		param := &optype.{{.TypeName}} {
 		}
 		{{.PreParams}}
-		if result, err := {{.MethodPackage}}.{{.BareMethodName}}(context.TODO(), param); err == nil {
-			c.JSON(200, netmodel.CallResult{
-				BaseCallResult : netmodel.BaseCallResult {
-					HTTPCode: 200,
-				},
-				Data: result,
-			})
+		if err := validate.Struct(param); err == nil {
+			if result, err := {{.MethodPackage}}.{{.BareMethodName}}(context.TODO(), param); err == nil {
+				c.JSON(200, netmodel.CallResult{
+					BaseCallResult : netmodel.BaseCallResult {
+						HTTPCode: 200,
+					},
+					Data: result,
+				})
+			} else {
+				c.JSON(200, netmodel.CallResult{
+					BaseCallResult : netmodel.BaseCallResult {
+						HTTPCode: 200,
+						Code: -1,
+						ErrMsg: err.Error(),
+					},
+				})
+			}
 		} else {
 			c.JSON(200, netmodel.CallResult{
 				BaseCallResult : netmodel.BaseCallResult {
 					HTTPCode: 200,
-					Code: -1,
+					Code: -2,
 					ErrMsg: err.Error(),
 				},
 			})
@@ -242,6 +261,44 @@ func UpperFirstLetter(str string) string {
 	return str
 }
 
+var standardFormat = map[string]string{
+	"float":     "Y",
+	"double":    "Y",
+	"int32":     "Y",
+	"int64":     "Y",
+	"date":      "Y",
+	"date-time": "Y",
+	"password":  "Y",
+	"byte":      "Y",
+	"binary":    "Y",
+}
+
+func getValidate(isRequred, isArray bool, format string) string {
+	var ls []string
+	if isRequred {
+		ls = append(ls, "required")
+	}
+	if format != "" {
+		tmp := standardFormat[format]
+		if tmp != "Y" {
+			if tmp == "" {
+				tmp = format
+			}
+			if !isRequred {
+				ls = append(ls, "omitempty")
+			}
+			if isArray {
+				ls = append(ls, "dive")
+			}
+			ls = append(ls, tmp)
+		}
+	}
+	if len(ls) > 0 {
+		return strings.Join(ls, ",")
+	}
+	return "-"
+}
+
 func v2doc2Gin(doc *openapiv2.Document) (goSource, goTypeSrc string) {
 	info := &GinTemplateInfo{
 		CreatedAt: time.Now().Format(time.RFC3339),
@@ -324,7 +381,7 @@ func v2doc2Gin(doc *openapiv2.Document) (goSource, goTypeSrc string) {
 				paramGoType := openAPIType2Go(paramType, paramFormat, item)
 				fieldInfo := &FieldInfo{
 					FieldName:   UpperFirstLetter(paramName),
-					FieldRemark: fmt.Sprintf("`json:\"%s,omitempty\"`", paramName),
+					FieldRemark: fmt.Sprintf("`json:\"%s,omitempty\" validate:\"%s\"`", paramName, getValidate(paramRequired, isGoTypeArray(paramGoType), paramFormat)),
 				}
 				if paramRequired || isGoTypeArray(paramGoType) {
 					fieldInfo.FieldType = paramGoType
