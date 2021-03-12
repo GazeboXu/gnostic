@@ -21,7 +21,8 @@ func main() {
 	env.RespondAndExitIfError(err)
 
 	callerSrc := ""
-	typeSrc := ""
+	goTypeSrc := ""
+	cTypeSrc := ""
 	for _, model := range env.Request.Models {
 		switch model.TypeUrl {
 		case "openapi.v2.Document":
@@ -29,7 +30,7 @@ func main() {
 			err = proto.Unmarshal(model.Value, documentv2)
 			if err == nil {
 				// Analyze the API document.
-				callerSrc, typeSrc = v2doc2Gin(documentv2)
+				callerSrc, goTypeSrc, cTypeSrc = v2doc2Gin(documentv2)
 			}
 		case "openapi.v3.Document":
 			documentv3 := &openapiv3.Document{}
@@ -61,8 +62,16 @@ func main() {
 	file2 := &plugins.File{}
 
 	file2.Name = outputName2
-	file2.Data = []byte(typeSrc)
+	file2.Data = []byte(goTypeSrc)
 	env.Response.Files = append(env.Response.Files, file2)
+
+	outputName3 := filepath.Join(
+		filepath.Dir(env.Request.SourceName), "/ctype/metadatastruct.h")
+	file3 := &plugins.File{}
+
+	file3.Name = outputName3
+	file3.Data = []byte(cTypeSrc)
+	env.Response.Files = append(env.Response.Files, file3)
 
 	env.RespondAndExitIfError(err)
 	env.RespondAndExit()
@@ -71,7 +80,7 @@ func main() {
 const GIN_TEMPLATE = `
 // gin handler file generated from openapi doc
 // Created by plugin gengin of gnostic at {{.CreatedAt}}
-// WARNING! All changes made in this file will be lost when building
+// WARNING! All changes made in this file will be lost when rebuilding
 
 package docs
 
@@ -144,7 +153,7 @@ func RouterInit(r *gin.Engine) {
 const GIN_TYPE_TEMPLATE = `
 // type file generated from openapi doc
 // Created by plugin gengin of gnostic at {{.CreatedAt}}
-// WARNING! All changes made in this file will be lost when building
+// WARNING! All changes made in this file will be lost when rebuilding
 
 package optype
 
@@ -163,10 +172,11 @@ type {{.TypeName}} struct {
 `
 
 type GinTemplateInfo struct {
-	CreatedAt string
-	Imports   []string
-	APITypes  []*APIType
-	APIs      []*GinPathTemplateInfo
+	CreatedAt      string
+	Imports        []string
+	APITypes       []*APIType
+	APIs           []*GinPathTemplateInfo
+	NetDefinitions []*NetDefinition
 }
 
 type APIType struct {
@@ -189,6 +199,42 @@ type GinPathTemplateInfo struct {
 	PreParams      string
 	// Params         string
 	TypeName string
+}
+
+const GIN_DEFINITION4C_TEMPLATE = `
+// c/c++ type file generated from openapi doc
+// Created by plugin gengin of gnostic at {{.CreatedAt}}
+// WARNING! All changes made in this file will be lost when rebuilding
+#ifndef META_DATA_STRUCT_H_E72A284E_42B3_428B_B0DF_BC0EDAEF23B1
+#define META_DATA_STRUCT_H_E72A284E_42B3_428B_B0DF_BC0EDAEF23B1
+
+#include <qstring.h>
+#include <qglobal.h>
+#include <string.h>
+{{range .NetDefinitions}}
+// {{.Comment}}
+struct {{.Name}} {
+	{{.Name}}(): {{.MemberInits}} {}
+	{{range .Fields}}{{.FieldType}}	{{.FieldName}};		// {{.FieldComment}}
+	{{end}}
+	XPACK(O({{.AllFields}}));
+};
+{{end}}
+#endif
+`
+
+type NetDefinitionField struct {
+	FieldType    string
+	FieldName    string
+	FieldComment string
+}
+
+type NetDefinition struct {
+	Comment     string
+	Name        string
+	Fields      []*NetDefinitionField
+	AllFields   string
+	MemberInits string
 }
 
 func splitFullMethodPath(fullMethodPath string) (methodPackage, bareMethod string) {
@@ -299,7 +345,30 @@ func getValidate(isRequred, isArray bool, format string) string {
 	return "-"
 }
 
-func v2doc2Gin(doc *openapiv2.Document) (goSource, goTypeSrc string) {
+func getCType(value *openapiv2.Schema) (cTypeName string) {
+	if value.XRef != "" {
+		ls := strings.Split(value.XRef, "/")
+		return convertStructName(ls[len(ls)-1])
+	}
+	cTypeName = "QString"
+	switch value.Type.GetValue()[0] {
+	case "integer":
+		cTypeName = "quint32"
+	case "number":
+		cTypeName = "qreal"
+	}
+	return cTypeName
+}
+
+func convertStructName(name string) (outStr string) {
+	// ls := strings.Split(name, ".")
+	// return ls[len(ls)-1]
+	outStr = strings.ReplaceAll(name, ".", "")
+	outStr = strings.ToUpper(outStr[:1]) + outStr[1:]
+	return outStr
+}
+
+func v2doc2Gin(doc *openapiv2.Document) (goSource, goTypeSrc, cTypeSrc string) {
 	info := &GinTemplateInfo{
 		CreatedAt: time.Now().Format(time.RFC3339),
 	}
@@ -418,5 +487,38 @@ func v2doc2Gin(doc *openapiv2.Document) (goSource, goTypeSrc string) {
 		tmp.Execute(builder, info)
 		goTypeSrc = builder.String()
 	}
-	return goSource, goTypeSrc
+	if tmp, err := template.New("ctype").Parse(GIN_DEFINITION4C_TEMPLATE); err == nil {
+		for _, nSchema := range doc.Definitions.AdditionalProperties {
+			if strings.Index(nSchema.Name, "Result") == -1 {
+				nd := &NetDefinition{
+					Name:    convertStructName(nSchema.Name),
+					Comment: nSchema.GetValue().Description,
+				}
+				var allFields []string
+				var memberInits []string
+				for _, v := range nSchema.Value.Properties.AdditionalProperties {
+					if value := v.GetValue(); value != nil {
+						field := &NetDefinitionField{
+							FieldName:    v.Name,
+							FieldType:    getCType(value),
+							FieldComment: value.Description,
+						}
+						if field.FieldType != "QString" {
+							memberInits = append(memberInits, fmt.Sprintf("%s(0)", v.Name))
+						}
+						nd.Fields = append(nd.Fields, field)
+
+						allFields = append(allFields, v.Name)
+					}
+				}
+				nd.AllFields = strings.Join(allFields, ",")
+				nd.MemberInits = strings.Join(memberInits, ",")
+				info.NetDefinitions = append(info.NetDefinitions, nd)
+			}
+		}
+		builder := &strings.Builder{}
+		tmp.Execute(builder, info)
+		cTypeSrc = builder.String()
+	}
+	return goSource, goTypeSrc, cTypeSrc
 }
