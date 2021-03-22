@@ -89,9 +89,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/go-playground/validator"
 	"gitee.com/julytech/zlutils"
-	"wrnetman/netadapter/overhttp/netmodel"
-	"wrnetman/docs/optype"
-	"wrnetman/biz/bizutils"
+	"{{.ModName}}/netadapter/overhttp/netmodel"
+	"{{.ModName}}/docs/optype"
+	"{{.ModName}}/biz/bizutils"
 	{{range .Imports}}{{.}}
 	{{end}}
 )
@@ -172,6 +172,7 @@ type {{.TypeName}} struct {
 `
 
 type GinTemplateInfo struct {
+	ModName        string
 	CreatedAt      string
 	Imports        []string
 	APITypes       []*APIType
@@ -373,6 +374,16 @@ func v2doc2Gin(doc *openapiv2.Document) (goSource, goTypeSrc, cTypeSrc string) {
 		CreatedAt: time.Now().Format(time.RFC3339),
 	}
 	if tmp, err := template.New("caller").Parse(GIN_TEMPLATE); err == nil {
+		for _, ext := range doc.VendorExtension {
+			if strings.ToLower(ext.Name) == "x-wr-modname" {
+				info.ModName = strings.Trim(ext.GetValue().GetYaml(), "\n")
+				break
+			}
+		}
+		if info.ModName == "" {
+			info.ModName = "wrnetman"
+		}
+
 		importMap := make(map[string]string)
 		for _, pathItem := range doc.Paths.Path {
 			methodInfo := &GinPathTemplateInfo{
@@ -475,7 +486,7 @@ func v2doc2Gin(doc *openapiv2.Document) (goSource, goTypeSrc, cTypeSrc string) {
 			info.APITypes = append(info.APITypes, apiType)
 		}
 		for key := range importMap {
-			info.Imports = append(info.Imports, fmt.Sprintf(`"wrnetman/netadapter/overhttp/%s"`, key))
+			info.Imports = append(info.Imports, fmt.Sprintf(`"%s/netadapter/overhttp/%s"`, info.ModName, key))
 		}
 
 		builder := &strings.Builder{}
