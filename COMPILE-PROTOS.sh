@@ -15,7 +15,8 @@
 # limitations under the License.
 #
 
-go get github.com/golang/protobuf/protoc-gen-go
+# todo, v1.5.1不能工作，如下方式也不行，需要手动处理
+# go get github.com/golang/protobuf/protoc-gen-go@v1.4.3
 
 protoc --go_out=. openapiv2/OpenAPIv2.proto
 protoc --go_out=. openapiv3/OpenAPIv3.proto
