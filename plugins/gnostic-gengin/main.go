@@ -87,7 +87,6 @@ package docs
 import (
 	"context"
 	"github.com/gin-gonic/gin"
-	"github.com/go-playground/validator"
 	"gitee.com/julytech/zlutils"
 	"{{.ModName}}/netadapter/overhttp/netmodel"
 	"{{.ModName}}/docs/optype"
@@ -106,20 +105,14 @@ var FuncMap = map[string]interface{} {
 	{{end}}
 }
 
-var validate *validator.Validate
-
-func init() {
-	validate = validator.New()
-	validate.RegisterValidation("sid", bizutils.ValidateSid)
-}
-
 func RouterInit(r *gin.Engine) {
 	{{range .APIs}}
 	r.{{.HTTPMethod}}("{{.BasePath}}{{.FullMethodPath}}", func(c *gin.Context) {
 		param := &optype.{{.TypeName}} {
 		}
 		{{.PreParams}}
-		if err := validate.Struct(param); err == nil {
+		if err := bizutils.ValidateParam(param); err == nil {
+			{{.CheckToken}}
 			if result, err := {{.MethodPackage}}.{{.BareMethodName}}(context.TODO(), param); err == nil {
 				c.JSON(200, netmodel.CallResult{
 					BaseCallResult : netmodel.BaseCallResult {
@@ -149,6 +142,18 @@ func RouterInit(r *gin.Engine) {
 	{{end}}
 }
 `
+
+const checkTokenStatement = `
+			if param.TokenInfo, err = bizutils.PreValidateToken(param.Token); err != nil {
+				c.JSON(200, netmodel.CallResult{
+					BaseCallResult : netmodel.BaseCallResult {
+						HTTPCode: 200,
+						Code: -3,
+						ErrMsg: err.Error(),
+					},
+				})
+				return
+			}`
 
 const GIN_TYPE_TEMPLATE = `
 // type file generated from openapi doc
@@ -199,7 +204,8 @@ type GinPathTemplateInfo struct {
 	BareMethodName string
 	PreParams      string
 	// Params         string
-	TypeName string
+	TypeName   string
+	CheckToken string
 }
 
 const GIN_DEFINITION4C_TEMPLATE = `
@@ -423,33 +429,43 @@ func v2doc2Gin(doc *openapiv2.Document) (goSource, goTypeSrc, cTypeSrc string) {
 			}
 			methodInfo.TypeName = apiType.TypeName
 
-			// apiType.Fields = append(apiType.Fields, &FieldInfo{
-			// 	FieldName:   "C",
-			// 	FieldType:   "*gin.Context",
-			// 	FieldRemark: "`json:\"-\"`",
-			// })
 			for index, param := range operation.Parameters {
 				// paramList[index] = fmt.Sprintf("param%d", index+1)
 				var paramName, paramType, paramFormat, getParamFuncName string
 				var paramRequired bool
 				var item *openapiv2.PrimitivesItems
+				isHeader := false
 				if nonBodyParam := param.GetParameter().GetNonBodyParameter(); nonBodyParam != nil {
-					if methodInfo.HTTPMethod == "GET" {
-						subSchema := nonBodyParam.GetQueryParameterSubSchema()
+					if subSchema := nonBodyParam.GetQueryParameterSubSchema(); subSchema != nil {
 						paramName = subSchema.Name
 						paramType = subSchema.Type
 						paramFormat = subSchema.Format
 						paramRequired = subSchema.Required
 						getParamFuncName = "GetQuery"
 						item = subSchema.Items
-					} else if methodInfo.HTTPMethod == "POST" {
-						subSchema := nonBodyParam.GetFormDataParameterSubSchema()
+					} else if subSchema := nonBodyParam.GetFormDataParameterSubSchema(); subSchema != nil {
 						paramName = subSchema.Name
 						paramType = subSchema.Type
 						paramFormat = subSchema.Format
 						paramRequired = subSchema.Required
 						getParamFuncName = "GetPostForm"
 						item = subSchema.Items
+					} else if subSchema := nonBodyParam.GetHeaderParameterSubSchema(); subSchema != nil {
+						paramName = subSchema.Name
+						paramType = subSchema.Type
+						paramFormat = subSchema.Format
+						paramRequired = subSchema.Required
+						getParamFuncName = "GetHeader"
+						item = subSchema.Items
+						if strings.ToLower(paramName) == "token" {
+							apiType.Fields = append(apiType.Fields, &FieldInfo{
+								FieldName:   "TokenInfo",
+								FieldType:   "interface{}",
+								FieldRemark: "`json:\"-\"`",
+							})
+							methodInfo.CheckToken = checkTokenStatement
+						}
+						isHeader = true
 					}
 				} else if bodyParam := param.GetParameter().GetBodyParameter(); bodyParam != nil { // todo
 					paramName = bodyParam.Name
@@ -463,7 +479,11 @@ func v2doc2Gin(doc *openapiv2.Document) (goSource, goTypeSrc, cTypeSrc string) {
 					FieldName:   UpperFirstLetter(paramName),
 					FieldRemark: fmt.Sprintf("`json:\"%s,omitempty\" validate:\"%s\"`", paramName, getValidate(paramRequired, isGoTypeArray(paramGoType), paramFormat)),
 				}
-				if paramRequired || isGoTypeArray(paramGoType) {
+				if isHeader {
+					fieldInfo.FieldType = paramGoType
+					preParamList[index] = fmt.Sprintf(`
+		param.%s = %s(c.%s("%s"))`, fieldInfo.FieldName, getTypeConvFun(paramGoType), getParamFuncName, paramName)
+				} else if paramRequired || isGoTypeArray(paramGoType) {
 					fieldInfo.FieldType = paramGoType
 					preParamList[index] = fmt.Sprintf(`
 		if strValue, isExist := c.%s("%s"); isExist {
