@@ -15,13 +15,13 @@
 @REM # limitations under the License.
 @REM #
 
-@REM go get github.com/golang/protobuf/protoc-gen-go
+go get github.com/golang/protobuf/protoc-gen-go
 
-protoc --go_out=. openapiv2/OpenAPIv2.proto
-protoc --go_out=. openapiv3/OpenAPIv3.proto
-protoc --go_out=. discovery/discovery.proto
-protoc --go_out=. plugins/plugin.proto
-protoc --go_out=. extensions/extension.proto
-protoc --go_out=. surface/surface.proto
-protoc --go_out=. metrics/vocabulary.proto
-protoc --go_out=. metrics/complexity.proto
+@REM protoc --go_out=. openapiv2/OpenAPIv2.proto
+@REM protoc --go_out=. openapiv3/OpenAPIv3.proto
+@REM protoc --go_out=. discovery/discovery.proto
+@REM protoc --go_out=. plugins/plugin.proto
+@REM protoc --go_out=. extensions/extension.proto
+@REM protoc --go_out=. surface/surface.proto
+@REM protoc --go_out=. metrics/vocabulary.proto
+@REM protoc --go_out=. metrics/complexity.proto

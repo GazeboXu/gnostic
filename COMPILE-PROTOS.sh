@@ -15,14 +15,16 @@
 # limitations under the License.
 #
 
-# todo, v1.5.1不能工作，如下方式也不行，需要手动处理
-# go get github.com/golang/protobuf/protoc-gen-go@v1.4.3
+go get github.com/golang/protobuf/protoc-gen-go
 
-protoc --go_out=. openapiv2/OpenAPIv2.proto
-protoc --go_out=. openapiv3/OpenAPIv3.proto
-protoc --go_out=. discovery/discovery.proto
-protoc --go_out=. plugins/plugin.proto
-protoc --go_out=. extensions/extension.proto
-protoc --go_out=. surface/surface.proto
-protoc --go_out=. metrics/vocabulary.proto
-protoc --go_out=. metrics/complexity.proto
+# 最新版本(v1.5.1)的protoc-gen-go使用了v1.26.0版的google.golang.org/protobuf，
+# 会导致如下命令出错，这些也不会用到，去掉
+
+# protoc --go_out=. openapiv2/OpenAPIv2.proto
+# protoc --go_out=. openapiv3/OpenAPIv3.proto
+# protoc --go_out=. discovery/discovery.proto
+# protoc --go_out=. plugins/plugin.proto
+# protoc --go_out=. extensions/extension.proto
+# protoc --go_out=. surface/surface.proto
+# protoc --go_out=. metrics/vocabulary.proto
+# protoc --go_out=. metrics/complexity.proto
